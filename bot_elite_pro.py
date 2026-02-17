@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== KONFIGURATSIYA ====================
 BOT_TOKEN = "8527388237:AAFBAFLj0PXsmlWnB8rfHo1y_hnutWfcXpQ"
-ADMIN_ID = 6965587290,8049290856
+ADMIN_IDS = {6965587290, 8049290856,}
 
 router = Router()
 
@@ -73,6 +73,9 @@ class AdminAddSubjectStates(StatesGroup):
     waiting_subject_name = State()
     waiting_subject_emoji = State()
 
+
+class AdminManageAdminsStates(StatesGroup):
+    waiting_search_query = State()
 class AdminAddQuestionStates(StatesGroup):
     waiting_subject_choice = State()
     waiting_question_text = State()
@@ -87,8 +90,15 @@ class AdminAddQuestionStates(StatesGroup):
 db = Database(DB_PATH)
 
 def is_admin(user_id: int) -> bool:
-    """Admin huquqlarini tekshirish"""
-    return user_id == ADMIN_ID
+    """Admin huquqlarini tekshirish (SUPER_ADMIN yoki DB admin)"""
+    if user_id in ADMIN_IDS:
+        return True
+    user = db.get_user(user_id)
+    return bool(user and user.get('is_admin', 0) == 1)
+
+def is_super_admin(user_id: int) -> bool:
+    """Faqat asosiy (super) adminlarni tekshirish"""
+    return user_id in ADMIN_IDS
 
 def get_all_subjects_combined() -> list:
     """questions.py + DB fanlarini birlashtirish"""
@@ -165,6 +175,7 @@ def get_admin_keyboard():
             InlineKeyboardButton(text="❓ Savol qo'shish", callback_data="admin_add_question")
         ],
         [InlineKeyboardButton(text="🗑 Fanlar/Savollar", callback_data="admin_manage_content")],
+        [InlineKeyboardButton(text="👑 Adminlar boshqaruvi", callback_data="admin_manage_admins")],
         [InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="back_to_menu")]
     ])
 
@@ -346,7 +357,7 @@ async def process_password(message: Message, state: FSMContext):
     db.add_user(message.from_user.id, data['username'], password)
     db.login_user(message.from_user.id)  # Ro'yxatdan o'tgandan keyin avtomatik login
     # Agar ADMIN_ID bo'lsa, admin flagini o'rnat
-    if message.from_user.id == ADMIN_ID:
+    if message.from_user.id in ADMIN_IDS:
         db.set_admin_flag(message.from_user.id, 1)
     
     text = f"""
@@ -1461,6 +1472,212 @@ async def admin_delete_question(callback: CallbackQuery):
     except Exception:
         await callback.answer("❌ Xatolik!", show_alert=True)
 
+
+# ==================== ADMINLAR BOSHQARUVI (MULTI-ADMIN) ====================
+
+@router.callback_query(F.data == "admin_manage_admins")
+async def admin_manage_admins(callback: CallbackQuery, state: FSMContext):
+    """Adminlar boshqaruvi — faqat SUPER ADMIN uchun"""
+    await callback.answer()
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("❌ Bu funksiya faqat SUPER ADMIN uchun!", show_alert=True)
+        return
+
+    admins = db.get_all_admins()
+    admins_list = [a for a in admins if a["user_id"] not in ADMIN_IDS]
+
+    if admins_list:
+        admins_text = "\n".join([
+            f"👑 <b>{a['username']}</b> — <code>{a['user_id']}</code>"
+            for a in admins_list
+        ])
+    else:
+        admins_text = "<i>Hali qo\'shimcha admin yo\'q</i>"
+
+    text = (
+        "╔═══════════════════════════════════╗\n"
+        "║   👑 <b>ADMINLAR BOSHQARUVI</b>      ║\n"
+        "╚═══════════════════════════════════╝\n\n"
+        f"🔱 <b>Super Admin:</b> Siz\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>👑 Qo\'shimcha adminlar ({len(admins_list)} ta):</b>\n"
+        f"{admins_text}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Nima qilmoqchisiz?"
+    )
+
+    keyboard_rows = []
+    for a in admins_list:
+        keyboard_rows.append([InlineKeyboardButton(
+            text=f"❌ {a['username']} ni adminlikdan olish",
+            callback_data=f"demote_admin_{a['user_id']}"
+        )])
+    keyboard_rows.append([InlineKeyboardButton(
+        text="➕ Yangi admin qo\'shish", callback_data="add_new_admin"
+    )])
+    keyboard_rows.append([InlineKeyboardButton(
+        text="◀️ Admin panel", callback_data="admin_panel"
+    )])
+
+    await callback.message.edit_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    )
+
+
+@router.callback_query(F.data == "add_new_admin")
+async def add_new_admin_start(callback: CallbackQuery, state: FSMContext):
+    """Yangi admin qo\'shish — qidirish"""
+    await callback.answer()
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("❌ Ruxsat yo\'q!", show_alert=True)
+        return
+
+    text = (
+        "╔═══════════════════════════════════╗\n"
+        "║   ➕ <b>ADMIN QO\'SHISH</b>           ║\n"
+        "╚═══════════════════════════════════╝\n\n"
+        "🔍 <b>Foydalanuvchi ismini yoki ID sini kiriting:</b>\n\n"
+        "<i>Masalan: Ali yoki 123456789</i>"
+    )
+    await callback.message.edit_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admin_manage_admins")]
+        ])
+    )
+    await state.set_state(AdminManageAdminsStates.waiting_search_query)
+
+
+@router.message(AdminManageAdminsStates.waiting_search_query)
+async def add_admin_search(message: Message, state: FSMContext):
+    """Foydalanuvchini qidirish va admin qilish"""
+    if not is_super_admin(message.from_user.id):
+        return
+
+    query = message.text.strip()
+    users = db.search_user(query)
+    users = [u for u in users if u["user_id"] not in ADMIN_IDS]
+
+    if not users:
+        await message.answer(
+            "❌ <b>Foydalanuvchi topilmadi!</b>\n\nQayta qidiring.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Qayta qidirish", callback_data="add_new_admin")],
+                [InlineKeyboardButton(text="◀️ Orqaga", callback_data="admin_manage_admins")]
+            ])
+        )
+        await state.clear()
+        return
+
+    keyboard_rows = []
+    for u in users[:10]:
+        status = "👑 Admin" if u.get("is_admin") else "👤 Oddiy"
+        keyboard_rows.append([InlineKeyboardButton(
+            text=f"{status} — {u['username']} ({u['user_id']})",
+            callback_data=f"promote_user_{u['user_id']}"
+        )])
+    keyboard_rows.append([InlineKeyboardButton(
+        text="◀️ Orqaga", callback_data="admin_manage_admins"
+    )])
+
+    await message.answer(
+        f"🔍 <b>{len(users)} ta natija topildi:</b>\n\nAdmin qilmoqchi bo\'lgan foydalanuvchini tanlang:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("promote_user_"))
+async def promote_user_to_admin(callback: CallbackQuery):
+    """Foydalanuvchini admin qilish"""
+    await callback.answer()
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("❌ Ruxsat yo'q!", show_alert=True)
+        return
+
+    try:
+        target_id = int(callback.data.replace("promote_user_", ""))
+        user = db.get_user(target_id)
+
+        if not user:
+            await callback.answer("❌ Foydalanuvchi topilmadi!", show_alert=True)
+            return
+
+        uname = user["username"]
+        if user.get("is_admin"):
+            await callback.answer(f"⚠️ {uname} allaqachon admin!", show_alert=True)
+            return
+
+        db.promote_to_admin(target_id)
+
+        await callback.message.edit_text(
+            f"✅ <b>{uname}</b> muvaffaqiyatli <b>ADMIN</b> qilindi!\n\n"
+            f"🆔 ID: <code>{target_id}</code>\n"
+            "Endi u admin panelga kira oladi.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👑 Adminlar ro'yxati", callback_data="admin_manage_admins")],
+                [InlineKeyboardButton(text="◀️ Admin panel", callback_data="admin_panel")]
+            ])
+        )
+    except Exception as e:
+        await callback.answer(f"❌ Xatolik: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("demote_admin_"))
+async def demote_admin(callback: CallbackQuery):
+    """Adminni oddiy foydalanuvchiga qaytarish"""
+    await callback.answer()
+    if not is_super_admin(callback.from_user.id):
+        await callback.answer("❌ Ruxsat yo\'q!", show_alert=True)
+        return
+
+    try:
+        target_id = int(callback.data.replace("demote_admin_", ""))
+        user = db.get_user(target_id)
+
+        if not user:
+            await callback.answer("❌ Foydalanuvchi topilmadi!", show_alert=True)
+            return
+
+        uname2 = user["username"]
+        await callback.message.edit_text(
+            f"⚠️ <b>DIQQAT!</b>\n\n"
+            f"<b>{uname2}</b> ni adminlikdan olishni tasdiqlaysizmi?\n"
+            f"🆔 ID: <code>{target_id}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Ha, adminlikdan olish",
+                    callback_data=f"confirm_demote_{target_id}"
+                )],
+                [InlineKeyboardButton(text="❌ Yo\'q", callback_data="admin_manage_admins")]
+            ])
+        )
+    except Exception as e:
+        await callback.answer(f"❌ Xatolik: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("confirm_demote_"))
+async def confirm_demote_admin(callback: CallbackQuery):
+    """Adminlikdan olishni tasdiqlash"""
+    await callback.answer()
+    if not is_super_admin(callback.from_user.id):
+        return
+
+    try:
+        target_id = int(callback.data.replace("confirm_demote_", ""))
+        user = db.get_user(target_id)
+        uname3 = user["username"]
+        db.demote_from_admin(target_id)
+        await callback.answer(f"✅ {uname3} adminlikdan olindi!", show_alert=True)
+        await admin_manage_admins(callback)
+    except Exception as e:
+        await callback.answer(f"❌ Xatolik: {e}", show_alert=True)
+
 # ==================== REGISTER ====================
 
 @router.callback_query(F.data == "register")
@@ -1535,7 +1752,7 @@ async def process_login_password(message: Message, state: FSMContext):
     # Login muvaffaqiyatli
     db.login_user(login_user_id)
     # Agar bu ADMIN_ID bo'lsa, admin flagini o'rnat
-    if login_user_id == ADMIN_ID:
+    if login_user_id in ADMIN_IDS:
         db.set_admin_flag(login_user_id, 1)
     user = db.get_user(login_user_id)
     await state.clear()
@@ -1635,7 +1852,7 @@ async def main():
     logger.info("║  🎓 ZAKOVATI ELITE PRO SYSTEM       ║")
     logger.info("╚══════════════════════════════════════╝")
     logger.info("✅ Bot muvaffaqiyatli ishga tushdi!")
-    logger.info(f"⚙️  Admin ID: {ADMIN_ID}")
+    logger.info(f"⚙️  Admin IDs: {ADMIN_IDS}")
     logger.info(f"📊 Jami savollar: {get_total_questions_combined()}")
     logger.info(f"📚 Jami fanlar: {len(get_all_subjects_combined())}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -1692,3 +1909,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# Placeholder to ensure file is valid
