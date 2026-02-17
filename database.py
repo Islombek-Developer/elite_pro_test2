@@ -557,6 +557,41 @@ class Database:
             print(f"Error set admin flag: {e}")
             return False
 
+    def get_all_admins(self) -> List[Dict]:
+        """Barcha adminlarni olish"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE is_admin = 1 ORDER BY created_at")
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def promote_to_admin(self, user_id: int) -> bool:
+        """Foydalanuvchini admin qilish"""
+        return self.set_admin_flag(user_id, 1)
+
+    def demote_from_admin(self, user_id: int) -> bool:
+        """Adminni oddiy foydalanuvchiga qaytarish"""
+        return self.set_admin_flag(user_id, 0)
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """ID bo'yicha foydalanuvchini topish"""
+        return self.get_user(user_id)
+
+    def search_user(self, query: str) -> List[Dict]:
+        """Foydalanuvchini ism yoki ID bo'yicha qidirish"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            user_id = int(query)
+            cursor.execute("SELECT * FROM users WHERE user_id = ? OR username LIKE ?",
+                           (user_id, f"%{query}%"))
+        except ValueError:
+            cursor.execute("SELECT * FROM users WHERE username LIKE ?", (f"%{query}%",))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
 
 # Test uchun
 if __name__ == "__main__":
