@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: zakovati-elite-pro-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_elite_pro.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.7"
+      - key: DATA_DIR
+        value: /data
+    disk:
+      name: zakovati-data
+      mountPath: /data
+      sizeGB: 1
