@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== KONFIGURATSIYA ====================
 BOT_TOKEN = "8527388237:AAFBAFLj0PXsmlWnB8rfHo1y_hnutWfcXpQ"
-ADMIN_ID = 6965587290
+ADMIN_ID = 6965587290,8049290856
 
 router = Router()
 
